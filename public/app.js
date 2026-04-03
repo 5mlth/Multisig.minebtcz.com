@@ -20,6 +20,34 @@ const state = {
   historyTotal: 0
 };
 
+function ownerTokensKey() {
+  return `btcz-multisig-owner-tokens-${state.streamKey}`;
+}
+
+function readOwnerTokens() {
+  try {
+    return JSON.parse(localStorage.getItem(ownerTokensKey()) || '{}') || {};
+  } catch {
+    return {};
+  }
+}
+
+function writeOwnerTokens(map) {
+  localStorage.setItem(ownerTokensKey(), JSON.stringify(map || {}));
+}
+
+function saveOwnerToken(orderId, ownerToken) {
+  if (!orderId || !ownerToken) return;
+  const map = readOwnerTokens();
+  map[orderId] = ownerToken;
+  writeOwnerTokens(map);
+}
+
+function getOwnerToken(orderId) {
+  const map = readOwnerTokens();
+  return map[orderId] || '';
+}
+
 function updateStreamType(order = null) {
   const el = $("streamType");
   if (!el) return;
@@ -62,6 +90,24 @@ function setValue(id, value) {
 
 function setText(id, value) {
   if ($(id)) $(id).textContent = value ?? "";
+}
+
+function currentOrderPin() {
+  return getValue('orderPinInput', '');
+}
+
+function setOrderPinUi(order = null) {
+  const display = $('orderPinDisplay');
+  const ownerHint = $('orderOwnerHint');
+  const input = $('orderPinInput');
+  const customInput = $('customPin');
+  const pin = String(order?.pin || '').trim();
+  const ownerAuthorized = !!order?.ownerAuthorized;
+
+  if (display) display.textContent = pin && ownerAuthorized ? pin : '---';
+  if (ownerHint) ownerHint.textContent = ownerAuthorized ? 'Owner session active. PIN restored.' : 'Enter the order PIN to submit, finalize, broadcast, or delete.';
+  if (input) input.value = ownerAuthorized && pin ? pin : ''; 
+  if (customInput && !state.currentOrder) customInput.value = '';
 }
 
 function setStreamAddressDisplay(address) {
@@ -173,8 +219,13 @@ async function postJson(url, body) {
   });
 }
 
-async function deleteJson(url) {
-  return fetchJson(url, { method: "DELETE" });
+async function deleteJson(url, body = null) {
+  const options = { method: "DELETE" };
+  if (body) {
+    options.headers = { "Content-Type": "application/json" };
+    options.body = JSON.stringify(body);
+  }
+  return fetchJson(url, options);
 }
 
 async function copyText(text) {
@@ -384,7 +435,9 @@ async function loadOrders() {
 }
 async function loadOrderDetails(orderId) {
   const stream = state.streamKey;
-  return fetchJson(`/api/stream/${stream}/order/${orderId}`);
+  const ownerToken = getOwnerToken(orderId);
+  const qs = ownerToken ? `?ownerToken=${encodeURIComponent(ownerToken)}` : '';
+  return fetchJson(`/api/stream/${stream}/order/${orderId}${qs}`);
 }
 
 function signedBadge(order) {
@@ -510,7 +563,7 @@ function renderOrders() {
 
       if (action === "delete-order") {
         try {
-          await deleteJson(`/api/stream/${state.streamKey}/order/${id}`);
+          await deleteJson(`/api/stream/${state.streamKey}/order/${id}`, { pin: currentOrderPin() });
           if (state.currentOrder?.id === id) {
             state.currentOrder = null;
             state.currentCli = null;
@@ -600,6 +653,7 @@ function clearOrderFormOnly() {
   renderKeyholderActivity([]);
   applyOrderUiState({ signedCount: 0, requiredSigs: 2, totalKeys: 3 });
   updateHexMeta();
+  setOrderPinUi(null);
 updateStreamType(null);
 }
 
@@ -626,6 +680,7 @@ function loadOrderIntoForm(order, cli = null) {
   setValue("keyholder3Hex", order.keyholder3Hex || "");
   setValue("finalHex", order.finalHex || "");
   setText("sharedStatus", order.status || "pending");
+  setOrderPinUi(order);
   setTxidDisplay(order.txid || "-");
   setText("sumSelected", String((order.inputs || []).length));
   setText("sumHexBytes", String(estimateBytes((order.inputs || []).length, Object.keys(order.outputs || {}).length)));
@@ -691,6 +746,7 @@ async function buildAutoTransaction() {
       maxEstimatedBytes,
       expiryPreset,
       expiryheight: expiryheightRaw ? Number(expiryheightRaw) : 0,
+      customPin: getValue('customPin', ''),
       ...getRuntimeStreamPayload()
     };
 
@@ -698,13 +754,15 @@ async function buildAutoTransaction() {
 
     const order = data.order || null;
     if (!order) throw new Error("Aucun order retourné");
+    if (data.ownerToken) saveOwnerToken(order.id, data.ownerToken);
 
-    await loadOrders();
-    await loadUtxos();
-    await loadStreamSummary();
+await loadOrders();
+await loadUtxos();
+await loadStreamSummary();
 
-    const fresh = state.orders.find((o) => o.id === order.id) || order;
-    loadOrderIntoForm(fresh, data.cli);
+const detail = await loadOrderDetails(order.id);
+const fresh = detail?.order || order;
+loadOrderIntoForm(fresh, detail?.cli || data.cli);
 
     setValue("selectedInfo", JSON.stringify({
       mode: fresh.mode,
@@ -770,7 +828,9 @@ async function submitKeyholder(slot) {
     await postJson(`/api/stream/${state.streamKey}/submit-keyholder`, {
       orderId,
       slot,
-      hex
+      hex,
+      pin: currentOrderPin(),
+      ownerToken: getOwnerToken(orderId)
     });
 
     const detail = await loadOrderDetails(orderId);
@@ -793,7 +853,9 @@ async function finalizeCurrent() {
 
     await postJson(`/api/stream/${state.streamKey}/finalize`, {
       orderId,
-      finalHex
+      finalHex,
+      pin: currentOrderPin(),
+      ownerToken: getOwnerToken(orderId)
     });
 
     const detail = await loadOrderDetails(orderId);
@@ -814,7 +876,9 @@ async function broadcastCurrent() {
 
     const data = await postJson(`/api/stream/${state.streamKey}/broadcast`, {
       orderId,
-      finalHex
+      finalHex,
+      pin: currentOrderPin(),
+      ownerToken: getOwnerToken(orderId)
     });
 
     setTxidDisplay(data.txid || "-");

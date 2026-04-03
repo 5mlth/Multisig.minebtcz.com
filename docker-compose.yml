@@ -1,5 +1,5 @@
 services:
-  btcz-multisig
+  btcz-multisig:
     build: .
     container_name: btcz-multisig
     restart: unless-stopped

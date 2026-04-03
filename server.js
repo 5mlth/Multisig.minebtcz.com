@@ -215,6 +215,81 @@ function hashHex(hex) {
   return crypto.createHash("sha256").update(String(hex || "")).digest("hex");
 }
 
+const ORDER_PIN_COOLDOWN_MS = 5 * 60 * 1000;
+const ORDER_PIN_MAX_FAILS = 3;
+
+function generateOrderPin() {
+  return String(Math.floor(100 + Math.random() * 900));
+}
+
+function normalizePin(pin) {
+  return String(pin || '').replace(/\D/g, '').slice(0, 3);
+}
+
+function generateOwnerToken() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+function publicOrder(order) {
+  if (!order) return order;
+  const clone = { ...order };
+  delete clone.pin;
+  delete clone.pinFails;
+  delete clone.pinCooldownUntil;
+  delete clone.ownerToken;
+  return clone;
+}
+
+function ownerViewOrder(order, ownerToken) {
+  const safe = { ...order };
+
+  const isOwner =
+    ownerToken &&
+    order.ownerToken &&
+    ownerToken === order.ownerToken;
+
+  if (isOwner) {
+    safe.pin = order.pin || "";
+    safe.ownerAuthorized = true;
+  } else {
+    safe.pin = "";
+    safe.ownerAuthorized = false;
+  }
+
+  return safe;
+}
+
+function findOrderIndex(stream, orderId) {
+  const orders = getOrders(stream);
+  const index = orders.findIndex((o) => o.id === orderId);
+  return { orders, index, order: index >= 0 ? orders[index] : null };
+}
+
+function verifyOrderPin(order, pin) {
+  const now = nowTs();
+  if (!order) return { ok: false, status: 404, error: 'order not found' };
+  if (order.pinCooldownUntil && now < Number(order.pinCooldownUntil || 0)) {
+    const waitMs = Number(order.pinCooldownUntil || 0) - now;
+    return { ok: false, status: 429, error: `PIN locked. Try again in ${Math.ceil(waitMs / 1000)}s` };
+  }
+
+  const normalized = normalizePin(pin);
+  if (!normalized) return { ok: false, status: 403, error: 'PIN required' };
+  if (normalized !== String(order.pin || '')) {
+    order.pinFails = Number(order.pinFails || 0) + 1;
+    if (order.pinFails >= ORDER_PIN_MAX_FAILS) {
+      order.pinFails = 0;
+      order.pinCooldownUntil = now + ORDER_PIN_COOLDOWN_MS;
+      return { ok: false, status: 429, error: 'Invalid PIN. Temporary cooldown activated.' };
+    }
+    return { ok: false, status: 403, error: `Invalid PIN (${order.pinFails}/${ORDER_PIN_MAX_FAILS})` };
+  }
+
+  order.pinFails = 0;
+  order.pinCooldownUntil = 0;
+  return { ok: true };
+}
+
 const HEALTH_GREEN_MAX = 2000000;
 const HEALTH_WARN_MAX = 2500000;
 
@@ -690,6 +765,12 @@ function buildOutputs(mode, streamAddress, destination, amount, fee, totalInputs
     };
   }
 
+  if (destination === streamAddress) {
+    return {
+      [streamAddress]: Number((amount + change).toFixed(8))
+    };
+  }
+
   return {
     [destination]: Number(amount.toFixed(8)),
     [streamAddress]: change
@@ -978,7 +1059,7 @@ app.get("/api/stream/:stream/orders", (req, res) => {
     if (!STREAMS[stream] && stream !== "CUSTOM") {
       return res.status(404).json({ error: "unknown stream" });
     }
-    res.json({ orders: getOrders(stream).map(enrichOrderWithSigningMeta) });
+    res.json({ orders: getOrders(stream).map((o) => enrichOrderWithSigningMeta(publicOrder(o))) });
   } catch (err) {
     res.status(500).json({ error: err.message || "orders error" });
   }
@@ -1000,7 +1081,8 @@ app.get("/api/stream/:stream/order/:orderId", (req, res) => {
     if (!order) return res.status(404).json({ error: "order not found" });
 
     const cli = buildCliCommands(order);
-    res.json({ order: enrichOrderWithSigningMeta(order), cli });
+    const ownerToken = String(req.query.ownerToken || "").trim();
+    res.json({ order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerToken)), cli });
   } catch (err) {
     res.status(500).json({ error: err.message || "get order error" });
   }
@@ -1058,7 +1140,7 @@ app.get("/api/stream/:stream/history", (req, res) => {
     const limit = Math.min(100, Math.max(1, Number(req.query.limit || 25)));
     const items = getHistory(stream);
     const sliced = items.slice(offset, offset + limit).map((item) => ({
-      ...enrichOrderWithSigningMeta(item),
+      ...enrichOrderWithSigningMeta(publicOrder(item)),
       cli: buildCliCommands(item)
     }));
 
@@ -1237,6 +1319,14 @@ app.post("/api/stream/:stream/build", async (req, res) => {
       currentBlock,
       expiryPreset,
       expiryheight,
+      address: info.address,
+      redeemScript: info.redeemScript || "",
+      requiredSigs: getRequiredSigsFromRedeem(info.redeemScript || ""),
+      totalKeys: getTotalKeysFromRedeem(info.redeemScript || ""),
+      pin: normalizePin(req.body?.customPin || "") || generateOrderPin(),
+      pinFails: 0,
+      pinCooldownUntil: 0,
+      ownerToken: generateOwnerToken(),
       summaryText: [
         `Mode: ${mode}`,
         `Requested amount: ${Number(requestedAmount || 0).toFixed(8)} BTCZ`,
@@ -1266,7 +1356,7 @@ app.post("/api/stream/:stream/build", async (req, res) => {
 
     res.json({
       ok: true,
-      order: enrichOrderWithSigningMeta(order),
+      order: enrichOrderWithSigningMeta(ownerViewOrder(order, order.ownerToken)),
       hex,
       inputs: finalInputs,
       selectedUtxos: pick.selected,
@@ -1287,7 +1377,9 @@ app.post("/api/stream/:stream/build", async (req, res) => {
       currentBlock: order.currentBlock,
       expiryPreset: order.expiryPreset,
       expiryheight: order.expiryheight,
-      cli
+      cli,
+      pin: order.pin,
+      ownerToken: order.ownerToken
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "build error" });
@@ -1320,11 +1412,15 @@ app.post("/api/stream/:stream/submit-keyholder", async (req, res) => {
     if (!orderId) return res.status(400).json({ error: "orderId is required" });
     if (!hex) return res.status(400).json({ error: "hex is required" });
 
-    const orders = getOrders(stream);
-    const idx = orders.findIndex((o) => o.id === orderId);
+    const { orders, index: idx, order } = findOrderIndex(stream, orderId);
     if (idx === -1) return res.status(404).json({ error: "order not found" });
 
-    const order = orders[idx];
+    const pinCheck = verifyOrderPin(order, req.body?.pin);
+    if (!pinCheck.ok) {
+      setOrders(stream, orders);
+      return res.status(pinCheck.status).json({ error: pinCheck.error });
+    }
+
     if (order.status === "broadcasted") return res.status(400).json({ error: "order already broadcasted" });
     if (order[`keyholder${slot}Hex`]) return res.status(400).json({ error: `K${slot} already submitted` });
 
@@ -1360,7 +1456,7 @@ app.post("/api/stream/:stream/submit-keyholder", async (req, res) => {
     orders[idx] = order;
     setOrders(stream, orders);
 
-    res.json({ ok: true, order: enrichOrderWithSigningMeta(order) });
+    res.json({ ok: true, order: enrichOrderWithSigningMeta(ownerViewOrder(order, String(req.body?.ownerToken || ""))) });
   } catch (err) {
     res.status(500).json({ error: err.message || "submit-keyholder error" });
   }
@@ -1379,11 +1475,15 @@ app.post("/api/stream/:stream/finalize", async (req, res) => {
     if (!orderId) return res.status(400).json({ error: "orderId is required" });
     if (!finalHex) return res.status(400).json({ error: "finalHex is required" });
 
-    const orders = getOrders(stream);
-    const idx = orders.findIndex((o) => o.id === orderId);
+    const { orders, index: idx, order } = findOrderIndex(stream, orderId);
     if (idx === -1) return res.status(404).json({ error: "order not found" });
 
-    const order = orders[idx];
+    const pinCheck = verifyOrderPin(order, req.body?.pin);
+    if (!pinCheck.ok) {
+      setOrders(stream, orders);
+      return res.status(pinCheck.status).json({ error: pinCheck.error });
+    }
+
     const validation = await validateSubmittedHex(order, finalHex);
     if (!validation.ok) return res.status(400).json({ error: validation.reason || "invalid final hex" });
 
@@ -1406,7 +1506,7 @@ app.post("/api/stream/:stream/finalize", async (req, res) => {
     setOrders(stream, orders);
     refreshLocksForOrder(order);
 
-    res.json({ ok: true, order: enrichOrderWithSigningMeta(order) });
+    res.json({ ok: true, order: enrichOrderWithSigningMeta(ownerViewOrder(order, String(req.body?.ownerToken || ""))) });
   } catch (err) {
     res.status(500).json({ error: err.message || "finalize error" });
   }
@@ -1422,11 +1522,16 @@ app.post("/api/stream/:stream/broadcast", async (req, res) => {
     const orderId = String(req.body?.orderId || "").trim();
     if (!orderId) return res.status(400).json({ error: "orderId is required" });
 
-    const orders = getOrders(stream);
-    const idx = orders.findIndex((o) => o.id === orderId);
+    const { orders, index: idx, order } = findOrderIndex(stream, orderId);
     if (idx === -1) return res.status(404).json({ error: "order not found" });
 
-    const order = orders[idx];
+    const pinCheck = verifyOrderPin(order, req.body?.pin);
+    if (!pinCheck.ok) {
+      setOrders(stream, orders);
+      return res.status(pinCheck.status).json({ error: pinCheck.error });
+    }
+
+    const orderOwnerToken = String(req.body?.ownerToken || "");
     const finalHex = String(req.body?.finalHex || order.finalHex || "").trim();
     if (!finalHex) return res.status(400).json({ error: "finalHex is required" });
 
@@ -1458,13 +1563,13 @@ app.post("/api/stream/:stream/broadcast", async (req, res) => {
     setOrders(stream, orders);
     unlockInputsForOrder(order);
 
-    res.json({ ok: true, txid, order });
+    res.json({ ok: true, txid, order: enrichOrderWithSigningMeta(ownerViewOrder(order, orderOwnerToken)) });
   } catch (err) {
     res.status(500).json({ error: err.message || "broadcast error" });
   }
 });
 
-app.delete("/api/stream/:stream/order/:orderId", (req, res) => {
+app.delete("/api/stream/:stream/order/:orderId", express.json({ limit: "1mb" }), (req, res) => {
   try {
     cleanupExpiredOrdersAndLocks();
 
@@ -1476,11 +1581,14 @@ app.delete("/api/stream/:stream/order/:orderId", (req, res) => {
     }
     if (!orderId) return res.status(400).json({ error: "orderId is required" });
 
-    const orders = getOrders(stream);
-    const idx = orders.findIndex((o) => o.id === orderId);
+    const { orders, index: idx, order } = findOrderIndex(stream, orderId);
     if (idx === -1) return res.status(404).json({ error: "order not found" });
 
-    const order = orders[idx];
+    const pinCheck = verifyOrderPin(order, req.body?.pin || req.query.pin);
+    if (!pinCheck.ok) {
+      setOrders(stream, orders);
+      return res.status(pinCheck.status).json({ error: pinCheck.error });
+    }
     if (Number(order.signedCount || 0) >= 1 || order.keyholder1Hex) {
       return res.status(400).json({ error: 'order locked after first signature' });
     }
@@ -1491,6 +1599,30 @@ app.delete("/api/stream/:stream/order/:orderId", (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message || "delete order error" });
+  }
+});
+
+app.post("/api/stream/:stream/order/:orderId/access", (req, res) => {
+  try {
+    const stream = String(req.params.stream || "").toUpperCase();
+    const orderId = String(req.params.orderId || "").trim();
+    if (!streamExists(stream)) return res.status(404).json({ error: "unknown stream" });
+    const { order } = findOrderIndex(stream, orderId);
+    if (!order) return res.status(404).json({ error: "order not found" });
+
+    const ownerToken = String(req.body?.ownerToken || "").trim();
+    const pin = normalizePin(req.body?.pin || "");
+    const ownerOk = !!ownerToken && ownerToken === String(order.ownerToken || "");
+    const pinOk = !!pin && pin === String(order.pin || "");
+
+    res.json({
+      ok: ownerOk || pinOk,
+      ownerAuthorized: ownerOk,
+      pinAccepted: pinOk,
+      order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerOk ? ownerToken : ""))
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "order access error" });
   }
 });
 

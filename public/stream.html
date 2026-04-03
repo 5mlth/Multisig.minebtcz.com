@@ -168,6 +168,8 @@
     .status-dot.ok{background:var(--ok);}
     button:disabled{opacity:.6;cursor:not-allowed;}
     .status-line{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#0d1117;}
+    .pin-box{display:flex;gap:12px;flex-wrap:wrap;align-items:end;margin-top:12px;}
+    .pin-badge{display:inline-flex;align-items:center;justify-content:center;min-width:72px;padding:10px 14px;border-radius:12px;background:#11161d;border:1px solid var(--line);font-weight:800;font-size:24px;letter-spacing:2px;}
   </style>
 </head>
 <body>
@@ -252,6 +254,11 @@
             </div>
 
             <div>
+              <label for="customPin">Order PIN (optional)</label>
+              <input id="customPin" maxlength="3" inputmode="numeric" placeholder="Random if empty" />
+            </div>
+
+            <div>
               <label for="maxInputs">Max Inputs</label>
               <input id="maxInputs" value="180" />
             </div>
@@ -318,6 +325,17 @@
 
         <div class="card">
           <h2>Sign / Final / Broadcast</h2>
+          <div class="pin-box" style="margin-top:0;margin-bottom:12px;">
+            <div>
+              <div class="small">Order PIN</div>
+              <div id="orderPinDisplay" class="pin-badge mono">---</div>
+            </div>
+            <div style="flex:1;min-width:240px;">
+              <label for="orderPinInput">Enter Order PIN</label>
+              <input id="orderPinInput" maxlength="3" inputmode="numeric" placeholder="Required for submit / finalize / broadcast / delete" />
+              <div id="orderOwnerHint" class="small" style="margin-top:6px;">Enter the order PIN to modify this order.</div>
+            </div>
+          </div>
           <div class="summary-grid" id="keyholderActivity" style="margin-bottom:12px;"></div>
 
           <div class="button-row" style="margin-top:0;">
