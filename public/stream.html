@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BitcoinZ Stream</title>
+  <style>
+    :root{
+      --bg:#0d1117;
+      --card:#161b22;
+      --muted:#8b949e;
+      --line:#30363d;
+      --text:#e6edf3;
+      --accent:#2f81f7;
+      --danger:#ff7b72;
+      --ok:#3fb950;
+      --warn:#d29922;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:var(--bg);
+      color:var(--text);
+      font-family:Arial,Helvetica,sans-serif;
+      padding:24px;
+    }
+    .wrap{max-width:1400px;margin:auto}
+    .hero-pills{display:flex;gap:12px;flex-wrap:wrap;margin:0 0 14px;}
+    .hero-pill{display:inline-flex;align-items:center;padding:8px 16px;border-radius:999px;background:linear-gradient(180deg, rgba(37,99,235,.18), rgba(15,23,42,.56));border:1px solid rgba(96,165,250,.28);color:#dbeafe;font-size:13px;font-weight:700;letter-spacing:.25px;box-shadow:inset 0 1px 0 rgba(255,255,255,.04),0 0 18px rgba(59,130,246,.08);}
+    .hero-pill.secondary{background:rgba(15,23,42,.72);border-color:rgba(96,165,250,.18);color:#bfdbfe;}
+    .card{
+      background:linear-gradient(180deg, rgba(255,255,255,.01), rgba(255,255,255,0)), var(--card);
+      border:1px solid var(--line);
+      border-radius:18px;
+      padding:18px;
+      margin-bottom:16px;
+      box-shadow:0 10px 30px rgba(0,0,0,.18);
+    }
+    .grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+      gap:12px;
+    }
+    .grid-2{
+      display:grid;
+      grid-template-columns:minmax(0,1.12fr) minmax(320px,.88fr);
+      gap:16px;
+      align-items:start;
+    }
+    @media(max-width:980px){
+      .grid-2{grid-template-columns:1fr}
+    }
+    h1,h2,h3{margin:0 0 10px}
+    input,textarea,select{
+      width:100%;
+      background:#0d1117;
+      color:var(--text);
+      border:1px solid var(--line);
+      border-radius:10px;
+      padding:10px 12px;
+      font-size:14px;
+    }
+    textarea{
+      resize:vertical;
+      min-height:110px;
+    }
+    .big{
+      min-height:180px;
+    }
+    .mono{
+      font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+      word-break:break-all;
+    }
+    .button-row{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      margin-top:12px;
+    }
+    button,a.btn{
+      background:var(--accent);
+      color:white;
+      border:0;
+      border-radius:10px;
+      padding:10px 14px;
+      font-weight:700;
+      text-decoration:none;
+      display:inline-block;
+      cursor:pointer;
+    }
+    button.secondary,a.secondary{background:#30363d}
+    button.danger{background:var(--danger)}
+    .summary-grid{
+      display:grid;
+      grid-template-columns:repeat(auto-fit,minmax(160px,1fr));
+      gap:10px;
+    }
+    .summary-item{
+      border:1px solid var(--line);
+      border-radius:10px;
+      padding:10px;
+      background:#11161d;
+    }
+    .summary-item .k{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .summary-item .v{
+      font-weight:800;
+      margin-top:6px;
+    }
+    .utxo-item,.order-item,.history-item{
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#11161d;
+      padding:10px;
+      margin-bottom:8px;
+    }
+    .small{
+      font-size:12px;
+      color:var(--muted);
+    }
+    .ok{color:var(--ok)}
+    .warn{color:var(--warn)}
+    .danger-text{color:var(--danger)}
+    .pill{
+      display:inline-block;
+      padding:4px 10px;
+      border-radius:999px;
+      border:1px solid var(--line);
+      color:var(--muted);
+      font-size:12px;
+    }
+    .scroll-box{
+      max-height:700px;
+      overflow-y:auto;
+      padding-right:6px;
+    }
+
+    .hex-meta{
+      margin-top:8px;
+      font-size:13px;
+      color:var(--muted);
+    }
+    .hex-meta.danger-text{
+      color:var(--danger);
+      font-weight:700;
+    }
+
+  .stream-type {
+    margin-top: 10px;
+    display:inline-flex;
+    align-items:center;
+    gap:8px;
+    padding:8px 14px;
+    border-radius:999px;
+    background:rgba(47,129,247,.10);
+    border:1px solid rgba(96,165,250,.24);
+    color:#cbd5e1;
+    font-size:14px;
+  }
+
+  .stream-type strong {
+    color: #6ee7ff;
+    letter-spacing:.25px;
+  }
+    .status-dot{display:inline-block;width:10px;height:10px;border-radius:999px;background:#56606b;margin-right:8px;vertical-align:middle;}
+    .status-dot.ok{background:var(--ok);}
+    button:disabled{opacity:.6;cursor:not-allowed;}
+    .status-line{margin-top:8px;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#0d1117;}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+
+    <div class="card">
+      <div class="button-row" style="margin-top:0;">
+        <a class="btn secondary" href="index.html">Back</a>
+      </div>
+      <div class="hero-pills">
+        <div class="hero-pill">BitcoinZ Multisig Stream</div>
+        <div class="hero-pill secondary">Signing / Final / Broadcast</div>
+      </div>
+      <h1 id="streamTitle">Stream</h1>
+      <div class="mono" id="streamAddress"></div>
+<div class="stream-type">
+  Type: <strong id="streamType">-</strong>
+</div>
+    </div>
+
+    <div class="card">
+      <div class="summary-grid">
+        <div class="summary-item">
+          <div class="k">Balance</div>
+          <div class="v" id="sumBalance">0.00000000 BTCZ</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">UTXO</div>
+          <div class="v" id="sumUtxoCount">0</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">Status</div>
+          <div class="v" id="currentStatus">idle</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">Selected Inputs</div>
+          <div class="v" id="sumSelected">0</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">Estimated Bytes</div>
+          <div class="v" id="sumHexBytes">0</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">Timer</div>
+          <div class="v" id="currentTimer">--:--</div>
+        </div>
+        <div class="summary-item">
+          <div class="k">Stream Health</div>
+          <div class="v" id="streamHealth">green</div>
+        </div>
+      </div>
+    </div>
+
+        <div class="grid-2">
+
+      <div>
+        <div class="card">
+          <h2>Order</h2>
+
+          <div class="grid">
+            <div>
+              <label for="txMode">Mode</label>
+              <select id="txMode">
+                <option value="send">Send</option>
+                <option value="consolidate">Consolidate</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="amount">Amount</label>
+              <input id="amount" value="0.00000000" />
+            </div>
+
+            <div>
+              <label for="fee">Fee</label>
+              <input id="fee" value="0.00010000" />
+            </div>
+
+            <div>
+              <label for="toAddress">Destination</label>
+              <input id="toAddress" placeholder="t1..." />
+            </div>
+
+            <div>
+              <label for="maxInputs">Max Inputs</label>
+              <input id="maxInputs" value="180" />
+            </div>
+
+            <div>
+              <label for="maxEstimatedBytes">Max Estimated Bytes</label>
+              <input id="maxEstimatedBytes" value="2621440" />
+            </div>
+
+            <div>
+              <label for="expiryPreset">Expiry Preset</label>
+              <select id="expiryPreset">
+                <option value="24h">24h</option>
+                <option value="3d">3 jours</option>
+                <option value="1w">1 semaine</option>
+              </select>
+            </div>
+
+            <div>
+              <label for="expiryheight">Expiry Height</label>
+              <input id="expiryheight" placeholder="auto from preset or custom block height" />
+            </div>
+
+            <div>
+              <label for="currentBlockBox">Current Block</label>
+              <input id="currentBlockBox" readonly />
+              <div id="currentBlockLink" class="small mono" style="margin-top:6px;"></div>
+            </div>
+          </div>
+
+          <div class="button-row">
+            <button id="reloadSummaryBtn" type="button">Reload Summary</button>
+            <button id="reloadUtxosBtn" type="button">Reload UTXO</button>
+            <button id="reloadOrdersBtn" type="button">Reload Orders</button>
+            <button id="buildAutoBtn" type="button">Auto Build Transaction</button>
+          </div>
+
+          <div style="margin-top:12px;">
+            <label for="selectedInfo">Selected / Outputs</label>
+            <textarea id="selectedInfo" class="mono" spellcheck="false"></textarea>
+          </div>
+
+          <div style="margin-top:12px;">
+            <label for="currentOrderId">Current Order ID</label>
+            <input id="currentOrderId" class="mono" />
+          </div>
+
+          <div style="margin-top:12px;">
+            <label for="unsignedHex">Unsigned Hex</label>
+            <textarea id="unsignedHex" class="big mono" spellcheck="false"></textarea>
+            <div id="unsignedHexBytes" class="hex-meta">HEX bytes: 0 / 2621440</div>
+          </div>
+
+          <div class="button-row">
+            <button id="decodeBtn" type="button" class="secondary">Decode</button>
+            <button id="copyUnsignedBtn" type="button" class="secondary">Copy Unsigned</button>
+          </div>
+
+          <div style="margin-top:12px;">
+            <label for="decodeResult">Decode Result</label>
+            <textarea id="decodeResult" class="mono" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>Sign / Final / Broadcast</h2>
+          <div class="summary-grid" id="keyholderActivity" style="margin-bottom:12px;"></div>
+
+          <div class="button-row" style="margin-top:0;">
+            <button id="submitK1Btn" type="button">Submit K1</button>
+            <button id="copyK1Btn" type="button" class="secondary">Copy K1</button>
+          </div>
+          <label for="keyholder1Hex" style="margin-top:12px;display:block;">Keyholder 1 Hex</label>
+          <textarea id="keyholder1Hex" class="mono"></textarea>
+          <div id="k1Status" class="status-line"></div>
+
+          <div class="button-row">
+            <button id="submitK2Btn" type="button">Submit K2</button>
+            <button id="copyK2Btn" type="button" class="secondary">Copy K2</button>
+          </div>
+          <label for="keyholder2Hex" style="margin-top:12px;display:block;">Keyholder 2 Hex</label>
+          <textarea id="keyholder2Hex" class="mono"></textarea>
+          <div id="k2Status" class="status-line"></div>
+
+          <div class="button-row">
+            <button id="submitK3Btn" type="button">Submit K3</button>
+            <button id="copyK3Btn" type="button" class="secondary">Copy K3</button>
+          </div>
+          <label for="keyholder3Hex" style="margin-top:12px;display:block;">Keyholder 3 Hex</label>
+          <textarea id="keyholder3Hex" class="mono"></textarea>
+          <div id="k3Status" class="status-line"></div>
+
+          <div class="button-row">
+            <button id="finalizeBtn" type="button">Finalize</button>
+            <button id="copyFinalBtn" type="button" class="secondary">Copy Final</button>
+            <button id="broadcastBtn" type="button">Broadcast</button>
+          </div>
+          <label for="finalHex" style="margin-top:12px;display:block;">Final Hex</label>
+          <textarea id="finalHex" class="big mono"></textarea>
+          <div id="finalStatus" class="status-line"></div>
+          <div id="deleteHint" class="small" style="margin-top:8px;"></div>
+
+          <div class="summary-grid" style="margin-top:12px;">
+            <div class="summary-item">
+              <div class="k">Current Order Status</div>
+              <div class="v" id="sharedStatus">none</div>
+            </div>
+            <div class="summary-item">
+              <div class="k">TXID</div>
+              <div class="v mono" id="txidBox">-</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>CLI Commands</h2>
+          <div class="small" style="margin-bottom:10px;">Use the normal copy for quick signing, or file output for very large signatures.</div>
+
+          <div>
+            <strong>Linux Create</strong>
+            <div class="button-row">
+              <button id="copyCliLinuxCreateBtn" type="button" class="secondary">Copy CLI</button>
+            </div>
+            <textarea id="cliLinuxCreate" class="mono" style="width:100%;height:120px;"></textarea>
+          </div>
+
+          <div style="margin-top:12px;">
+            <strong>Linux Sign</strong>
+            <div class="button-row">
+              <button id="copyCliLinuxSignBtn" type="button" class="secondary">Copy CLI</button>
+              <button id="copyCliLinuxSignFileBtn" type="button" class="secondary">Copy CLI + File Output</button>
+            </div>
+            <textarea id="cliLinuxSign" class="mono" style="width:100%;height:140px;"></textarea>
+          </div>
+
+          <div style="margin-top:12px;">
+            <strong>PowerShell Create</strong>
+            <div class="button-row">
+              <button id="copyCliPSCreateBtn" type="button" class="secondary">Copy CLI</button>
+            </div>
+            <textarea id="cliPSCreate" class="mono" style="width:100%;height:120px;"></textarea>
+          </div>
+
+          <div style="margin-top:12px;">
+            <strong>PowerShell Sign</strong>
+            <div class="button-row">
+              <button id="copyCliPSSignBtn" type="button" class="secondary">Copy CLI</button>
+              <button id="copyCliPSSignFileBtn" type="button" class="secondary">Copy CLI + File Output</button>
+            </div>
+            <textarea id="cliPSSign" class="mono" style="width:100%;height:140px;"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>Current Orders</h2>
+          <div id="ordersList"></div>
+        </div>
+
+        <div class="card">
+          <h2>UTXO</h2>
+          <div class="small" id="utxoMeta">0 shown</div>
+          <div id="utxoList" class="scroll-box"></div>
+        </div>
+
+        <div class="card">
+          <h2>History</h2>
+          <div id="historyList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

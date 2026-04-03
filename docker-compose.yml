@@ -1,0 +1,30 @@
+services:
+  btcz-multisig
+    build: .
+    container_name: btcz-multisig
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/app/data
+      - ./public:/app/public
+    environment:
+      - PORT=3000
+      - BTCZ_RPC_PROTOCOL=http
+      - BTCZ_RPC_HOST=172.20.0.1
+      - BTCZ_RPC_PORT=1979
+      - BTCZ_RPC_USER=${BTCZ_RPC_USER}
+      - BTCZ_RPC_PASSWORD=${BTCZ_RPC_PASSWORD}
+      - STREAM_BP_ADDRESS=t3cq6DPTZbVShmY5hs4NLJyBhTfw5KNZNcf
+      - STREAM_ZF_ADDRESS=t3LUnrQk7pHJTvTyTVzdDHNVamMGfvXAi4k
+      - STREAM_MG_ADDRESS=t3URkWgiiYVNTAvKHy5HdPia3hft9byrsNz
+      - STREAM_BP_REDEEMSCRIPT=5221022223c84c4f479659ac992e50c9dcdceec3937e0097b25d7f87ed1841b06bf9cd21028be3081efc46d74f1a64a58b063e77011667a5cfa7323ade5903f2108dbddb092103cded8915d7ee97beb1ce4acb0e50873b0845e294238a3c95b13e280c93ec205653ae
+      - STREAM_ZF_REDEEMSCRIPT=522103cded8915d7ee97beb1ce4acb0e50873b0845e294238a3c95b13e280c93ec20562103780adbb86068156a13ebf0bb422bbee7b10074aec45bbdd72c6df76480619c9e2103aa2f696c8fe08d80b11c117d383777f442e54d8d3e885d5ad183d8ff88ebc5ab53ae
+      - STREAM_MG_REDEEMSCRIPT=522103aa2f696c8fe08d80b11c117d383777f442e54d8d3e885d5ad183d8ff88ebc5ab21029d5ed7aeae3d99f30f67d6d89301f847805b1d417bbbea1e8cf8d71ac426553721022223c84c4f479659ac992e50c9dcdceec3937e0097b25d7f87ed1841b06bf9cd53ae
+    networks:
+      btcz-net:
+        ipv4_address: 172.20.0.11
+
+networks:
+  btcz-net:
+    external: true
