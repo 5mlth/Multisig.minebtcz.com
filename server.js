@@ -400,28 +400,6 @@ function isDerSignaturePush(push) {
   ].includes(sighash);
 }
 
-function getRequiredSigsFromRedeem(redeem = "") {
-  const hex = String(redeem || "").toLowerCase().trim();
-  const op = hex.slice(0, 2);
-
-  const map = {
-    "51": 1,
-    "52": 2,
-    "53": 3,
-    "54": 4,
-    "55": 5,
-    "56": 6
-  };
-
-  return map[op] || 2;
-}
-
-function getTotalKeysFromRedeem(redeem = "") {
-  const hex = String(redeem || "").toLowerCase().trim();
-  const beforeAE = hex.split("ae")[0];
-  const matches = beforeAE.match(/21[0-9a-f]{66}/g);
-  return matches ? matches.length : 3;
-}
 
 function deriveSigningMetaFromDecoded(decoded, redeemScript = '') {
   const vin = Array.isArray(decoded?.vin) ? decoded.vin : [];
