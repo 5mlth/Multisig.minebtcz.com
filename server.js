@@ -230,6 +230,17 @@ function generateOwnerToken() {
   return crypto.randomBytes(24).toString('hex');
 }
 
+const LOCKED_HEX_PLACEHOLDER = "[LOCKED - PIN REQUIRED]";
+
+function maskSignedHexFields(clone) {
+  if (!clone) return clone;
+  clone.keyholder1Hex = clone.keyholder1Hex ? LOCKED_HEX_PLACEHOLDER : "";
+  clone.keyholder2Hex = clone.keyholder2Hex ? LOCKED_HEX_PLACEHOLDER : "";
+  clone.keyholder3Hex = clone.keyholder3Hex ? LOCKED_HEX_PLACEHOLDER : "";
+  clone.finalHex = clone.finalHex ? LOCKED_HEX_PLACEHOLDER : "";
+  return clone;
+}
+
 function publicOrder(order) {
   if (!order) return order;
   const clone = { ...order };
@@ -237,7 +248,8 @@ function publicOrder(order) {
   delete clone.pinFails;
   delete clone.pinCooldownUntil;
   delete clone.ownerToken;
-  return clone;
+  delete clone.ownerAuthorized;
+  return maskSignedHexFields(clone);
 }
 
 function ownerViewOrder(order, ownerToken) {
@@ -251,12 +263,12 @@ function ownerViewOrder(order, ownerToken) {
   if (isOwner) {
     safe.pin = order.pin || "";
     safe.ownerAuthorized = true;
-  } else {
-    safe.pin = "";
-    safe.ownerAuthorized = false;
+    return safe;
   }
 
-  return safe;
+  safe.pin = "";
+  safe.ownerAuthorized = false;
+  return maskSignedHexFields(safe);
 }
 
 function findOrderIndex(stream, orderId) {

@@ -109,6 +109,13 @@ function setOrderPinUi(order = null) {
 
   if (display) display.textContent = pin && ownerAuthorized ? pin : '---';
   if (ownerHint) ownerHint.textContent = ownerAuthorized ? 'Owner session active. PIN restored.' : 'Enter the order PIN to unlock submit, finalize, broadcast, or delete.';
+  if (ownerHint) {
+    ownerHint.textContent = ownerAuthorized
+      ? 'Owner session active. PIN restored.'
+      : (state.pinAuthorized
+          ? 'PIN accepted. Submit, finalize, broadcast, or delete are now unlocked.'
+          : 'Enter the order PIN to unlock submit, finalize, broadcast, or delete.');
+  }
   if (input && ownerAuthorized && pin) input.value = pin;
   if (customInput && !state.currentOrder) customInput.value = '';
 }
