@@ -1569,8 +1569,8 @@ app.delete("/api/stream/:stream/order/:orderId", express.json({ limit: "1mb" }),
       setOrders(stream, orders);
       return res.status(pinCheck.status).json({ error: pinCheck.error });
     }
-    if (Number(order.signedCount || 0) >= 1 || order.keyholder1Hex) {
-      return res.status(400).json({ error: 'order locked after first signature' });
+    if (String(order.status || '').toLowerCase() === 'broadcasted' || order.txid) {
+      return res.status(400).json({ error: 'broadcasted orders cannot be cancelled' });
     }
     unlockInputsForOrder(order);
     orders.splice(idx, 1);

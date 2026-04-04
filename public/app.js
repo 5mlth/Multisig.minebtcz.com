@@ -17,7 +17,8 @@ const state = {
   utxoRenderCount: 0,
   historyOffset: 0,
   historyHasMore: false,
-  historyTotal: 0
+  historyTotal: 0,
+  pinAuthorized: false
 };
 
 function ownerTokensKey() {
@@ -104,10 +105,38 @@ function setOrderPinUi(order = null) {
   const pin = String(order?.pin || '').trim();
   const ownerAuthorized = !!order?.ownerAuthorized;
 
+  state.pinAuthorized = ownerAuthorized;
+
   if (display) display.textContent = pin && ownerAuthorized ? pin : '---';
-  if (ownerHint) ownerHint.textContent = ownerAuthorized ? 'Owner session active. PIN restored.' : 'Enter the order PIN to submit, finalize, broadcast, or delete.';
-  if (input) input.value = ownerAuthorized && pin ? pin : ''; 
+  if (ownerHint) ownerHint.textContent = ownerAuthorized ? 'Owner session active. PIN restored.' : 'Enter the order PIN to unlock submit, finalize, broadcast, or delete.';
+  if (input && ownerAuthorized && pin) input.value = pin;
   if (customInput && !state.currentOrder) customInput.value = '';
+}
+
+async function refreshPinAuthority() {
+  const orderId = getValue('currentOrderId', '');
+  if (!orderId) {
+    state.pinAuthorized = false;
+    applyOrderUiState(state.currentOrder || { signedCount: 0, requiredSigs: 2, totalKeys: 3 });
+    return;
+  }
+
+  try {
+    const data = await postJson(`/api/stream/${state.streamKey}/order/${orderId}/access`, {
+      pin: currentOrderPin(),
+      ownerToken: getOwnerToken(orderId)
+    });
+
+    state.pinAuthorized = !!(data?.ownerAuthorized || data?.pinAccepted);
+    if (data?.order) {
+      state.currentOrder = data.order;
+      setOrderPinUi(data.order);
+    }
+  } catch {
+    state.pinAuthorized = false;
+  }
+
+  applyOrderUiState(state.currentOrder || { signedCount: 0, requiredSigs: 2, totalKeys: 3 });
 }
 
 function setStreamAddressDisplay(address) {
@@ -462,6 +491,7 @@ function applyOrderUiState(order) {
   const count = Number(order?.signedCount || 0);
   const total = Number(order?.totalKeys || 3);
   const required = Number(order?.requiredSigs || 2);
+  const pinOk = !!state.pinAuthorized;
   const setBtn = (id, disabled, label) => {
     const el = $(id);
     if (!el) return;
@@ -470,11 +500,13 @@ function applyOrderUiState(order) {
     el.classList.toggle('secondary', !!disabled);
   };
 
-  setBtn('submitK1Btn', count >= 1, count >= 1 ? 'K1 Accepted' : 'Submit K1');
-  setBtn('submitK2Btn', total < 2 || count >= 2, count >= 2 ? 'K2 Accepted' : 'Submit K2');
-  setBtn('submitK3Btn', total < 3 || count >= 3, count >= 3 ? 'K3 Accepted' : 'Submit K3');
+  setBtn('submitK1Btn', !pinOk || count >= 1, count >= 1 ? 'K1 Accepted' : 'Submit K1');
+  setBtn('submitK2Btn', !pinOk || total < 2 || count >= 2, count >= 2 ? 'K2 Accepted' : 'Submit K2');
+  setBtn('submitK3Btn', !pinOk || total < 3 || count >= 3, count >= 3 ? 'K3 Accepted' : 'Submit K3');
+  setBtn('finalizeBtn', !pinOk, 'Finalize');
+  setBtn('broadcastBtn', !pinOk, 'Broadcast');
 
-  if ($('deleteHint')) $('deleteHint').textContent = count >= 1 ? 'Delete locked after first signature' : 'Delete available before K1 only';
+  if ($('deleteHint')) $('deleteHint').textContent = pinOk ? 'PIN holder can cancel this order at any time before broadcast.' : 'PIN required to cancel, finalize, or broadcast this order.';
   if ($('k1Status')) $('k1Status').innerHTML = keyholderStatusHtml(1, count, order);
   if ($('k2Status')) $('k2Status').innerHTML = keyholderStatusHtml(2, count, order);
   if ($('k3Status')) $('k3Status').innerHTML = keyholderStatusHtml(3, count, order);
@@ -517,7 +549,7 @@ function renderOrders() {
 
   $("ordersList").innerHTML = items.map((order) => {
     const selected = state.currentOrder?.id === order.id;
-    const deleteDisabled = Number(order.signedCount || 0) >= 1;
+    const deleteDisabled = false;
     return `
       <div class="order-item">
         <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
@@ -533,7 +565,7 @@ function renderOrders() {
         <div class="button-row">
           <button type="button" data-action="load-order" data-id="${order.id}">${selected ? "Loaded" : "Load"}</button>
           <button type="button" class="secondary" data-action="copy-order-hex" data-id="${order.id}">Copy Unsigned</button>
-          <button type="button" class="danger ${deleteDisabled ? 'secondary' : ''}" data-action="delete-order" data-id="${order.id}" ${deleteDisabled ? 'disabled' : ''}>Delete</button>
+          <button type="button" class="danger" data-action="delete-order" data-id="${order.id}">Delete</button>
         </div>
       </div>
     `;
@@ -651,6 +683,7 @@ function clearOrderFormOnly() {
   setText("sumHexBytes", "0");
   setText("currentTimer", "--:--");
   renderKeyholderActivity([]);
+  state.pinAuthorized = false;
   applyOrderUiState({ signedCount: 0, requiredSigs: 2, totalKeys: 3 });
   updateHexMeta();
   setOrderPinUi(null);
@@ -714,6 +747,7 @@ function loadOrderIntoForm(order, cli = null) {
   applyOrderUiState(order);
   updateHexMeta();
 updateStreamType(order);
+  refreshPinAuthority();
 }
 
 
@@ -926,6 +960,7 @@ updateStreamType(null);
 
   $("finalizeBtn")?.addEventListener("click", finalizeCurrent);
   $("broadcastBtn")?.addEventListener("click", broadcastCurrent);
+  $("orderPinInput")?.addEventListener('input', () => { refreshPinAuthority(); });
 
   $("copyUnsignedBtn")?.addEventListener("click", async () => {
     await copyText(getValue("unsignedHex", ""));
