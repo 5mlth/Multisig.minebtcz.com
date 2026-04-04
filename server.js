@@ -353,28 +353,30 @@ function parseScriptPushes(hex) {
   return pushes;
 }
 
+
 function getRequiredSigsFromRedeem(redeem = "") {
   const hex = String(redeem || "").toLowerCase().trim();
-  const op = hex.slice(0, 2);
+  if (hex.length < 2) return 0;
 
-  const map = {
-    "51": 1,
-    "52": 2,
-    "53": 3,
-    "54": 4,
-    "55": 5,
-    "56": 6
-  };
+  const op = parseInt(hex.slice(0, 2), 16);
 
-  return map[op] || 2;
+  if (isNaN(op) || op < 0x51 || op > 0x60) return 0;
+
+  return op - 0x50;
 }
 
 function getTotalKeysFromRedeem(redeem = "") {
   const hex = String(redeem || "").toLowerCase().trim();
-  const beforeAE = hex.split("ae")[0];
+  if (hex.length < 4) return 0;
 
-  const matches = beforeAE.match(/21[0-9a-f]{66}/g);
-  return matches ? matches.length : 3;
+  // avant OP_CHECKMULTISIG (ae)
+  if (!hex.endsWith("ae")) return 0;
+
+  const op = parseInt(hex.slice(-4, -2), 16);
+
+  if (isNaN(op) || op < 0x51 || op > 0x60) return 0;
+
+  return op - 0x50;
 }
 
 function isDerSignaturePush(push) {
