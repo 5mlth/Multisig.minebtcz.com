@@ -252,7 +252,7 @@ function publicOrder(order) {
   return maskSignedHexFields(clone);
 }
 
-function ownerViewOrder(order, ownerToken) {
+function ownerViewOrder(order, ownerToken, revealHex = false) {
   const safe = { ...order };
 
   const isOwner =
@@ -268,7 +268,7 @@ function ownerViewOrder(order, ownerToken) {
 
   safe.pin = "";
   safe.ownerAuthorized = false;
-  return maskSignedHexFields(safe);
+  return revealHex ? safe : maskSignedHexFields(safe);
 }
 
 function findOrderIndex(stream, orderId) {
@@ -1074,7 +1074,15 @@ app.get("/api/stream/:stream/order/:orderId", (req, res) => {
 
     const cli = buildCliCommands(order);
     const ownerToken = String(req.query.ownerToken || "").trim();
-    res.json({ order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerToken)), cli });
+    const pin = normalizePin(req.query.pin || "");
+    const ownerOk = !!ownerToken && ownerToken === String(order.ownerToken || "");
+    const pinOk = !!pin && pin === String(order.pin || "");
+    res.json({
+      order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerOk ? ownerToken : "", pinOk)),
+      cli,
+      ownerAuthorized: ownerOk,
+      pinAccepted: pinOk
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || "get order error" });
   }
@@ -1611,7 +1619,7 @@ app.post("/api/stream/:stream/order/:orderId/access", (req, res) => {
       ok: ownerOk || pinOk,
       ownerAuthorized: ownerOk,
       pinAccepted: pinOk,
-      order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerOk ? ownerToken : ""))
+      order: enrichOrderWithSigningMeta(ownerViewOrder(order, ownerOk ? ownerToken : "", pinOk))
     });
   } catch (err) {
     res.status(500).json({ error: err.message || "order access error" });

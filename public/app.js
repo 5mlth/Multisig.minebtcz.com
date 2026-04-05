@@ -104,15 +104,13 @@ function setOrderPinUi(order = null) {
   const customInput = $('customPin');
   const pin = String(order?.pin || '').trim();
   const ownerAuthorized = !!order?.ownerAuthorized;
-
-  state.pinAuthorized = ownerAuthorized;
+  const pinAuthorized = !!state.pinAuthorized;
 
   if (display) display.textContent = pin && ownerAuthorized ? pin : '---';
-  if (ownerHint) ownerHint.textContent = ownerAuthorized ? 'Owner session active. PIN restored.' : 'Enter the order PIN to unlock submit, finalize, broadcast, or delete.';
   if (ownerHint) {
     ownerHint.textContent = ownerAuthorized
       ? 'Owner session active. PIN restored.'
-      : (state.pinAuthorized
+      : (pinAuthorized
           ? 'PIN accepted. Submit, finalize, broadcast, or delete are now unlocked.'
           : 'Enter the order PIN to unlock submit, finalize, broadcast, or delete.');
   }
@@ -137,7 +135,12 @@ async function refreshPinAuthority() {
     state.pinAuthorized = !!(data?.ownerAuthorized || data?.pinAccepted);
     if (data?.order) {
       state.currentOrder = data.order;
+      setValue('keyholder1Hex', data.order.keyholder1Hex || '');
+      setValue('keyholder2Hex', data.order.keyholder2Hex || '');
+      setValue('keyholder3Hex', data.order.keyholder3Hex || '');
+      setValue('finalHex', data.order.finalHex || '');
       setOrderPinUi(data.order);
+      updateHexMeta();
     }
   } catch {
     state.pinAuthorized = false;
@@ -472,8 +475,12 @@ async function loadOrders() {
 async function loadOrderDetails(orderId) {
   const stream = state.streamKey;
   const ownerToken = getOwnerToken(orderId);
-  const qs = ownerToken ? `?ownerToken=${encodeURIComponent(ownerToken)}` : '';
-  return fetchJson(`/api/stream/${stream}/order/${orderId}${qs}`);
+  const pin = currentOrderPin();
+  const qs = new URLSearchParams();
+  if (ownerToken) qs.set('ownerToken', ownerToken);
+  if (pin) qs.set('pin', pin);
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return fetchJson(`/api/stream/${stream}/order/${orderId}${suffix}`);
 }
 
 function signedBadge(order) {
