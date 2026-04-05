@@ -15,10 +15,17 @@ const state = {
   currentOrder: null,
   currentCli: null,
   utxoRenderCount: 0,
+  utxoOffset: 0,
+  utxoTotal: 0,
+  utxoHasMore: false,
+  utxoLoading: false,
   historyOffset: 0,
   historyHasMore: false,
   historyTotal: 0,
-  pinAuthorized: false
+  pinAuthorized: false,
+  zAddresses: [],
+  spendableUtxos: [],
+  coinbaseUtxos: []
 };
 
 function ownerTokensKey() {
@@ -400,14 +407,17 @@ async function loadStreamSummary() {
 }
 
 function utxoRowHtml(u) {
+  const statusClass = u.coinbase ? 'danger-text' : (u.locked ? 'warn' : 'ok');
+  const statusText = u.coinbase ? 'coinbase - shield only' : (u.locked ? 'locked' : 'free');
   return `
     <div class="utxo-item">
       <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
         <strong>${fmt8(u.amount)} BTCZ</strong>
-        <span class="pill ${u.locked ? 'warn' : 'ok'}">${u.locked ? 'locked' : 'free'}</span>
+        <span class="pill ${statusClass}">${statusText}</span>
       </div>
       <div class="small mono" style="margin-top:6px;">${u.txid}</div>
       <div class="small">vout: ${u.vout} | height: ${u.height || 0}</div>
+      ${u.coinbase ? `<div class="small danger-text">${u.restrictionReason || 'coinbase - must be shielded to z-address first'}</div>` : ''}
       ${u.lock ? `<div class="small">order: ${u.lock.orderId || "?"}</div>` : ""}
     </div>
   `;
@@ -417,22 +427,59 @@ function renderMoreUtxos() {
   const box = $("utxoList");
   if (!box) return;
 
+  const spendable = state.spendableUtxos.length ? state.spendableUtxos : state.utxos.filter((u) => !u.coinbase);
+  const coinbase = state.coinbaseUtxos.length ? state.coinbaseUtxos : state.utxos.filter((u) => !!u.coinbase);
+
   if (!state.utxos.length) {
     box.innerHTML = `<div class="small">Aucun UTXO détecté pour ce stream.</div>`;
-    setText("utxoMeta", "0 shown");
+    setText("utxoMeta", `0 / ${state.utxoTotal || 0} shown`);
+    setText('coinbaseMeta', 'No coinbase-restricted UTXO detected');
     return;
   }
 
-  const nextCount = Math.min(state.utxoRenderCount + UTXO_PAGE_SIZE, state.utxos.length);
-  const slice = state.utxos.slice(state.utxoRenderCount, nextCount);
+  box.innerHTML = `
+    <div class="small" style="margin-bottom:8px;">Loaded UTXO</div>
+    ${spendable.map(utxoRowHtml).join("")}
+    ${coinbase.length ? `<div style="margin-top:12px;"><div class="small danger-text" style="margin-bottom:8px;">Coinbase UTXO (z-wallet shield only)</div>${coinbase.map(utxoRowHtml).join("")}</div>` : ''}
+  `;
 
-  if (state.utxoRenderCount === 0) {
-    box.innerHTML = "";
+  setText("utxoMeta", `${state.utxos.length} / ${state.utxoTotal} shown · ${spendable.length} spendable loaded · ${coinbase.length} coinbase loaded${state.utxoHasMore ? ' · scroll for more' : ''}`);
+  setText('coinbaseMeta', coinbase.length ? `${coinbase.length} loaded coinbase UTXO require z-shield first` : 'No coinbase-restricted UTXO detected');
+}
+
+async function loadMoreUtxos(showAll = false) {
+  if (state.utxoLoading || (!showAll && !state.utxoHasMore && state.utxoOffset !== 0)) return;
+
+  const stream = state.streamKey;
+  const payload = isCustomStream() ? getRuntimeStreamPayload() : {};
+  if (isCustomStream() && !payload.address) {
+    state.utxos = [];
+    state.spendableUtxos = [];
+    state.coinbaseUtxos = [];
+    state.utxoOffset = 0;
+    state.utxoTotal = 0;
+    state.utxoHasMore = false;
+    renderMoreUtxos();
+    return;
   }
 
-  box.insertAdjacentHTML("beforeend", slice.map(utxoRowHtml).join(""));
-  state.utxoRenderCount = nextCount;
-  setText("utxoMeta", `${state.utxoRenderCount} / ${state.utxos.length} shown`);
+  state.utxoLoading = true;
+  try {
+    const limit = showAll ? 5000 : UTXO_PAGE_SIZE;
+    const data = await postJson(`/api/stream/${stream}/utxos?offset=${state.utxoOffset}&limit=${limit}${showAll ? '&showAll=true' : ''}`, payload);
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    state.utxoTotal = Number(data.total || 0);
+    state.utxoOffset = Number(data.nextOffset || (state.utxoOffset + items.length));
+    state.utxoHasMore = !!data.hasMore;
+    state.utxos = state.utxos.concat(items);
+    state.spendableUtxos = state.utxos.filter((u) => !u.coinbase);
+    state.coinbaseUtxos = state.utxos.filter((u) => !!u.coinbase);
+    setText("sumUtxoCount", String(state.utxoTotal));
+    renderMoreUtxos();
+  } finally {
+    state.utxoLoading = false;
+  }
 }
 
 function bindUtxoScroll() {
@@ -440,29 +487,30 @@ function bindUtxoScroll() {
   if (!box) return;
 
   box.onscroll = () => {
-    const nearBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 100;
-    if (nearBottom && state.utxoRenderCount < state.utxos.length) {
-      renderMoreUtxos();
+    const nearBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 150;
+    if (nearBottom && state.utxoHasMore && !state.utxoLoading) {
+      loadMoreUtxos(false);
     }
   };
 }
 
-async function loadUtxos() {
-  const stream = state.streamKey;
-  const payload = isCustomStream() ? getRuntimeStreamPayload() : {};
-  if (isCustomStream() && !payload.address) {
-    state.utxos = [];
-    state.utxoRenderCount = 0;
-    renderMoreUtxos();
-    return;
+async function showAllUtxos() {
+  while (state.utxoHasMore && !state.utxoLoading) {
+    await loadMoreUtxos(true);
+    if (!state.utxoHasMore) break;
   }
+}
 
-  const data = await postJson(`/api/stream/${stream}/utxos`, payload);
-  state.utxos = Array.isArray(data.utxos) ? data.utxos : [];
-  state.utxoRenderCount = 0;
-
-  setText("sumUtxoCount", String(state.utxos.length));
+async function loadUtxos() {
+  state.utxos = [];
+  state.spendableUtxos = [];
+  state.coinbaseUtxos = [];
+  state.utxoOffset = 0;
+  state.utxoTotal = 0;
+  state.utxoHasMore = false;
+  state.utxoLoading = false;
   renderMoreUtxos();
+  await loadMoreUtxos(false);
   bindUtxoScroll();
 }
 
@@ -706,6 +754,7 @@ updateStreamType(null);
 
 
 function loadOrderIntoForm(order, cli = null) {
+  resetFeeTouched();
   state.currentOrder = order || null;
 
   if (!order) {
@@ -771,6 +820,35 @@ function renderCurrentTimer() {
     return;
   }
   setText("currentTimer", remainingLabel(state.currentOrder));
+}
+
+
+async function loadZAddresses() {
+  try {
+    const data = await fetchJson('/api/z-addresses');
+    state.zAddresses = Array.isArray(data.addresses) ? data.addresses : [];
+    const list = $('zWalletList');
+    if (list) {
+      list.innerHTML = state.zAddresses.length
+        ? state.zAddresses.map((z) => `<option value="${z}"></option>`).join('')
+        : '';
+    }
+  } catch {
+    state.zAddresses = [];
+  }
+}
+
+async function shieldCoinbaseNow() {
+  try {
+    const zAddress = getValue('zShieldAddress', '');
+    if (!zAddress || !zAddress.startsWith('z')) throw new Error('Valid z-address required');
+    const payload = { ...getRuntimeStreamPayload(), zAddress };
+    const data = await postJson(`/api/stream/${state.streamKey}/shield-coinbase`, payload);
+    setValue('selectedInfo', `Shield started. opid/result: ${JSON.stringify(data.result)}`);
+    await loadUtxos();
+  } catch (err) {
+    setValue('selectedInfo', `Shield error: ${err.message}`);
+  }
 }
 
 async function buildAutoTransaction() {
@@ -964,6 +1042,8 @@ updateStreamType(null);
 
   $("reloadSummaryBtn")?.addEventListener("click", loadStreamSummary);
   $("reloadUtxosBtn")?.addEventListener("click", loadUtxos);
+  $("showAllUtxoBtn")?.addEventListener("click", showAllUtxos);
+  $("shieldCoinbaseBtn")?.addEventListener("click", shieldCoinbaseNow);
   $("reloadOrdersBtn")?.addEventListener("click", loadOrders);
   $("buildAutoBtn")?.addEventListener("click", buildAutoTransaction);
   $("decodeBtn")?.addEventListener("click", decodeCurrentUnsigned);
@@ -975,6 +1055,7 @@ updateStreamType(null);
   $("finalizeBtn")?.addEventListener("click", finalizeCurrent);
   $("broadcastBtn")?.addEventListener("click", broadcastCurrent);
   $("orderPinInput")?.addEventListener('input', () => { refreshPinAuthority(); });
+  $("fee")?.addEventListener('input', () => { state.feeTouched = true; });
 
   $("copyUnsignedBtn")?.addEventListener("click", async () => {
     await copyText(getValue("unsignedHex", ""));
@@ -1017,6 +1098,7 @@ updateStreamType(null);
   renderModeUi();
 
   await loadStreamSummary();
+  await loadZAddresses();
   await loadUtxos();
   await loadOrders();
   await loadHistory();

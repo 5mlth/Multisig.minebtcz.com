@@ -591,9 +591,49 @@ async function getAddressBalance(address) {
   };
 }
 
-async function getAddressUtxos(address, redeemScript = "") {
+const txMetaCache = new Map();
+
+async function getTxMeta(txid) {
+  if (!txid) return { coinbase: false };
+  if (txMetaCache.has(txid)) return txMetaCache.get(txid);
+  let meta = { coinbase: false };
+  try {
+    const tx = await rpcCall("getrawtransaction", [txid, 1]);
+    meta = { coinbase: !!tx?.vin?.[0]?.coinbase, tx };
+  } catch {
+    meta = { coinbase: false };
+  }
+  txMetaCache.set(txid, meta);
+  return meta;
+}
+
+async function enrichUtxosWithSourceMeta(utxos = [], options = {}) {
+  const batchSize = Math.max(1, Number(options.batchSize || 25));
+  const enriched = [];
+
+  for (let i = 0; i < utxos.length; i += batchSize) {
+    const batch = utxos.slice(i, i + batchSize);
+    const metas = await Promise.all(batch.map((u) => getTxMeta(u.txid)));
+    for (let j = 0; j < batch.length; j++) {
+      const u = batch[j];
+      const meta = metas[j] || { coinbase: false };
+      enriched.push({
+        ...u,
+        coinbase: !!meta.coinbase,
+        spendRestricted: !!meta.coinbase,
+        restrictionReason: meta.coinbase ? 'coinbase - must be shielded to z-address first' : ''
+      });
+    }
+  }
+
+  return enriched;
+}
+
+async function getAddressUtxos(address, redeemScript = "", options = {}) {
   const utxos = await rpcCall("getaddressutxos", [{ addresses: [address] }]);
-  return normalizeAddressUtxos(utxos, address, redeemScript);
+  const normalized = normalizeAddressUtxos(utxos, address, redeemScript);
+  if (options.enrich === false) return normalized;
+  return enrichUtxosWithSourceMeta(normalized, options);
 }
 
 function cleanupExpiredOrdersAndLocks() {
@@ -678,7 +718,7 @@ function autoSelectForSend(utxos, amount, fee, maxInputs, maxEstimatedBytes) {
   const target = Number(amount) + Number(fee);
 
   const available = [...utxos]
-    .filter((u) => !isInputLockedByOtherOrder(u.txid, u.vout))
+    .filter((u) => !u.spendRestricted && !isInputLockedByOtherOrder(u.txid, u.vout))
     .sort((a, b) => {
       const ah = Number(a.height || 0);
       const bh = Number(b.height || 0);
@@ -710,7 +750,7 @@ function autoSelectForSend(utxos, amount, fee, maxInputs, maxEstimatedBytes) {
 
 function autoSelectForConsolidate(utxos, fee, maxInputs, maxEstimatedBytes) {
   const available = [...utxos]
-    .filter((u) => !isInputLockedByOtherOrder(u.txid, u.vout))
+    .filter((u) => !u.spendRestricted && !isInputLockedByOtherOrder(u.txid, u.vout))
     .sort((a, b) => a.satoshis - b.satoshis);
 
   const picked = [];
@@ -954,7 +994,7 @@ res.set("Cache-Control", "no-store");
         balance = bal.balance;
         received = bal.received;
 
-        const utxos = await getAddressUtxos(info.address, info.redeemScript);
+        const utxos = await getAddressUtxos(info.address, info.redeemScript, { enrich: false });
         utxoCount = utxos.length;
       } catch (err) {
         console.error(`summary ${key} rpc error:`, err.message);
@@ -994,7 +1034,7 @@ app.post("/api/stream/:stream/summary", async (req, res) => {
     if (!runtime?.address) return res.status(400).json({ error: "address is required" });
 
     const bal = await getAddressBalance(runtime.address);
-    const utxos = await getAddressUtxos(runtime.address, runtime.redeemScript);
+    const utxos = await getAddressUtxos(runtime.address, runtime.redeemScript, { enrich: false });
 
     const orders = getOrders(stream).filter((o) => o.address === runtime.address);
     const status = orders.some((o) => o.status === "openorder")
@@ -1026,10 +1066,18 @@ app.post("/api/stream/:stream/utxos", async (req, res) => {
     const runtime = getStreamRuntimeConfig(stream, req.body);
     if (!runtime?.address) return res.status(400).json({ error: "address is required" });
 
-    const utxos = await getAddressUtxos(runtime.address, runtime.redeemScript);
+    const offset = Math.max(0, Number(req.query.offset || req.body?.offset || 0));
+    const requestedLimit = Number(req.query.limit || req.body?.limit || 100);
+    const showAll = String(req.query.showAll || req.body?.showAll || '').toLowerCase() === 'true';
+    const limit = showAll ? 5000 : Math.min(500, Math.max(1, requestedLimit || 100));
+
+    const rawUtxos = await getAddressUtxos(runtime.address, runtime.redeemScript, { enrich: false });
+    const total = rawUtxos.length;
+    const page = rawUtxos.slice(offset, offset + limit);
+    const enriched = await enrichUtxosWithSourceMeta(page, { batchSize: 25 });
 
     const locks = getLocks();
-    const enriched = utxos.map((u) => {
+    const items = enriched.map((u) => {
       const lk = locks[lockKey(u.txid, u.vout)];
       return {
         ...u,
@@ -1038,9 +1086,55 @@ app.post("/api/stream/:stream/utxos", async (req, res) => {
       };
     });
 
-    res.json({ utxos: enriched });
+    const nextOffset = offset + items.length;
+    res.json({
+      items,
+      total,
+      offset,
+      limit,
+      nextOffset,
+      hasMore: nextOffset < total,
+      shown: nextOffset,
+      spendableShown: items.filter((u) => !u.coinbase).length,
+      coinbaseShown: items.filter((u) => !!u.coinbase).length
+    });
   } catch (err) {
     res.status(500).json({ error: err.message || "stream utxos error" });
+  }
+});
+
+app.get("/api/z-addresses", async (req, res) => {
+  try {
+    const addresses = await rpcCall("z_listaddresses", []);
+    res.json({ addresses: Array.isArray(addresses) ? addresses : [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message || "z-list error" });
+  }
+});
+
+app.post("/api/stream/:stream/shield-coinbase", async (req, res) => {
+  try {
+    cleanupExpiredOrdersAndLocks();
+    const stream = String(req.params.stream || "").toUpperCase();
+    if (!streamExists(stream)) return res.status(404).json({ error: "unknown stream" });
+
+    const runtime = getStreamRuntimeConfig(stream, req.body);
+    if (!runtime?.address) return res.status(400).json({ error: "address is required" });
+    const zAddress = String(req.body?.zAddress || '').trim();
+    if (!zAddress || !zAddress.startsWith('z')) {
+      return res.status(400).json({ error: 'valid z-address is required' });
+    }
+
+    const utxos = await getAddressUtxos(runtime.address, runtime.redeemScript);
+    const coinbaseUtxos = utxos.filter((u) => !!u.coinbase);
+    if (!coinbaseUtxos.length) {
+      return res.status(400).json({ error: 'no coinbase UTXO available to shield' });
+    }
+
+    const result = await rpcCall('z_shieldcoinbase', [runtime.address, zAddress]);
+    res.json({ ok: true, result, coinbaseCount: coinbaseUtxos.length, fromAddress: runtime.address, zAddress });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'shield-coinbase error' });
   }
 });
 
@@ -1108,7 +1202,7 @@ app.post("/api/debug/custom-build", async (req, res) => {
     const maxEstimatedBytes = Number(req.body?.maxEstimatedBytes || DEFAULT_MAX_ESTIMATED_BYTES);
 
     const utxos = await getAddressUtxos(info.address, info.redeemScript);
-    const unlocked = utxos.filter((u) => !isInputLockedByOtherOrder(u.txid, u.vout));
+    const unlocked = utxos.filter((u) => !u.spendRestricted && !isInputLockedByOtherOrder(u.txid, u.vout));
 
     const pick = autoSelectForConsolidate(utxos, fee, maxInputs, maxEstimatedBytes);
 
@@ -1196,6 +1290,7 @@ app.post("/api/stream/:stream/build", async (req, res) => {
     const requestedAmount = Number(req.body?.amount || 0);
     const amount = mode === "consolidate" ? 0 : requestedAmount;
     const requestedFee = Number(req.body?.fee || DEFAULT_FEE);
+    const feeTouched = !!req.body?.feeTouched;
     const locktime = Number(req.body?.locktime || 0);
     const expiryPreset = String(req.body?.expiryPreset || "24h");
     const manualExpiryHeight = req.body?.expiryheight;
@@ -1221,11 +1316,12 @@ app.post("/api/stream/:stream/build", async (req, res) => {
     if (!pick.selected.length) {
       return res.status(400).json({
         error: "Aucun UTXO disponible pour cette transaction",
+
         debug: {
           stream: ctx.streamKey,
           address: info.address,
           utxoCount: utxos.length,
-          unlockedCount: utxos.filter((u) => !isInputLockedByOtherOrder(u.txid, u.vout)).length,
+          unlockedCount: utxos.filter((u) => !u.spendRestricted && !isInputLockedByOtherOrder(u.txid, u.vout)).length,
           requestedFee,
           maxInputs,
           maxEstimatedBytes
@@ -1237,9 +1333,10 @@ app.post("/api/stream/:stream/build", async (req, res) => {
     const inputCount = inputs.length;
     const outputCount = mode === "consolidate" ? 1 : 2;
     const estimatedBytes = estimateBytesMultisig(inputCount, outputCount, mode);
-    const feeSats = mode === "consolidate"
-      ? Math.ceil(estimatedBytes)
-      : Math.max(btczToZatoshi(requestedFee), Math.ceil(estimatedBytes));
+    const minimumFeeSats = Math.ceil(estimatedBytes);
+    const feeSats = feeTouched
+      ? Math.max(btczToZatoshi(requestedFee), minimumFeeSats)
+      : minimumFeeSats;
     const fee = satsToBtcz(feeSats);
 
     if (mode === "consolidate") {
@@ -1256,13 +1353,22 @@ app.post("/api/stream/:stream/build", async (req, res) => {
       });
     }
 
+    const restricted = pick.selected.filter((u) => !!u.spendRestricted);
+    if (restricted.length) {
+      return res.status(400).json({
+        error: 'Coinbase UTXO must be shielded to a z-address first',
+        restrictedUtxos: restricted.map((u) => ({ txid: u.txid, vout: u.vout, amount: u.amount, reason: u.restrictionReason }))
+      });
+    }
+
     const finalInputs = pick.selected.map((u) => ({ txid: u.txid, vout: u.vout }));
     const finalInputCount = finalInputs.length;
     const finalOutputCount = mode === "consolidate" ? 1 : 2;
     const finalEstimatedBytes = estimateBytesMultisig(finalInputCount, finalOutputCount, mode);
-    const finalFeeSats = mode === "consolidate"
-      ? Math.ceil(finalEstimatedBytes)
-      : Math.max(btczToZatoshi(requestedFee), Math.ceil(finalEstimatedBytes));
+    const finalMinimumFeeSats = Math.ceil(finalEstimatedBytes);
+    const finalFeeSats = feeTouched
+      ? Math.max(btczToZatoshi(requestedFee), finalMinimumFeeSats)
+      : finalMinimumFeeSats;
     const finalFee = satsToBtcz(finalFeeSats);
 
     const outputs = buildOutputs(mode, info.address, destination, amount, finalFee, pick.totalInputs);
@@ -1295,8 +1401,8 @@ app.post("/api/stream/:stream/build", async (req, res) => {
       amount: Number(amount.toFixed(8)),
       fee: Number(finalFee.toFixed(8)),
       feeSats: Number(finalFeeSats),
-      feeAuto: mode === "consolidate",
-      feeMode: mode === "consolidate" ? "1sat_per_byte" : "manual_or_min_1sat_per_byte",
+      feeAuto: !feeTouched,
+      feeMode: feeTouched ? "manual_or_min_1sat_per_byte" : "auto_min_1sat_per_byte",
       totalInputs: Number(pick.totalInputs.toFixed(8)),
       change: mode === "consolidate"
         ? Number((pick.totalInputs - finalFee).toFixed(8))

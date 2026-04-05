@@ -246,6 +246,7 @@
             <div>
               <label for="fee">Fee</label>
               <input id="fee" value="0.00010000" />
+              <div class="small" style="margin-top:6px;">If unchanged, build will automatically apply the minimum required fee (1 sat/byte).</div>
             </div>
 
             <div>
@@ -433,8 +434,22 @@
 
         <div class="card">
           <h2>UTXO</h2>
-          <div class="small" id="utxoMeta">0 shown</div>
+          <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;">
+            <div class="small" id="utxoMeta">0 shown</div>
+            <button id="showAllUtxoBtn" type="button" class="secondary">Show All UTXO</button>
+          </div>
           <div id="utxoList" class="scroll-box"></div>
+          <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--line);">
+            <h3 style="margin-bottom:8px;">Z Wallet / Coinbase Shield</h3>
+            <div id="coinbaseMeta" class="small danger-text" style="margin-bottom:8px;">No coinbase-restricted UTXO detected</div>
+            <label for="zShieldAddress">Shield destination (z-address)</label>
+            <input id="zShieldAddress" class="mono" list="zWalletList" placeholder="z..." />
+            <datalist id="zWalletList"></datalist>
+            <div class="button-row">
+              <button id="shieldCoinbaseBtn" type="button" class="secondary">Shield Coinbase to z-address</button>
+            </div>
+            <div class="small" style="margin-top:6px;">Coinbase UTXO are sorted into this section and blocked from normal transparent spending.</div>
+          </div>
         </div>
 
         <div class="card">
